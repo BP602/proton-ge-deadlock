@@ -35,7 +35,7 @@ WINE_QPC_TSC_UNORDERED=1 %command% -vulkan
 
 ## Releases and CI
 
-`.github/workflows/release.yml` runs daily and on manual dispatch (optional `ge_tag` input). It:
+`.github/workflows/release.yml` runs hourly and on manual dispatch (optional `ge_tag` input). It:
 
 1. Finds the latest GE release (or the requested tag). If `<tag>-deadlock` already exists as a release here, it stops.
 2. Checks out that GE tag with all submodules and hooks `patches/` into `protonprep-valve-staging.sh` (`scripts/apply-overlay.sh`):
