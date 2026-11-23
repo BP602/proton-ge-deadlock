@@ -39,6 +39,7 @@ built() { # <path-glob> <file name>
 replace() {
     local rel="$1" src="$2" objcopy="$3" dest="$dist/files/$1" mode
     [ -f "$dest" ] || { echo "::error::$rel is not in GE's release" >&2; exit 1; }
+    [ -f "$src" ] || { echo "::error::no built file for $rel" >&2; exit 1; }
     mode=$(stat -c %a "$dest")
     chmod u+w "$dest"          # GE ships these read-only
     "$objcopy" --strip-debug "$src" "$dest"
@@ -51,8 +52,8 @@ replace lib/wine/x86_64-unix/ntdll.so             "$(built '*/dst-wine-x86_64/li
 replace lib/wine/i386-unix/ntdll.so               "$(built '*/dst-wine-i386/lib/wine/i386-unix/*' ntdll.so)"           objcopy
 replace lib/wine/x86_64-windows/ntdll.dll         "$(built '*/dst-wine-x86_64/lib/wine/x86_64-windows/*' ntdll.dll)"   x86_64-w64-mingw32-objcopy
 replace lib/wine/i386-windows/ntdll.dll           "$(built '*/dst-wine-i386/lib/wine/i386-windows/*' ntdll.dll)"       i686-w64-mingw32-objcopy
-replace lib/wine/x86_64-windows/lsteamclient.dll  "$(built '*/x86_64-windows/*' lsteamclient.dll)"                    x86_64-w64-mingw32-objcopy
-replace lib/wine/i386-windows/lsteamclient.dll    "$(built '*/i386-windows/*' lsteamclient.dll)"                       i686-w64-mingw32-objcopy
+replace lib/wine/x86_64-windows/lsteamclient.dll  "$(built '*/dst-lsteamclient-x86_64/lib/wine/x86_64-windows/*' lsteamclient.dll)"                    x86_64-w64-mingw32-objcopy
+replace lib/wine/i386-windows/lsteamclient.dll    "$(built '*/dst-lsteamclient-i386/lib/wine/i386-windows/*' lsteamclient.dll)"                       i686-w64-mingw32-objcopy
 
 # Steam and Proton key the tool and its prefixes by name
 for f in compatibilitytool.vdf version; do
