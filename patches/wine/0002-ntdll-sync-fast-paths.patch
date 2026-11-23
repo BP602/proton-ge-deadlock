@@ -560,7 +560,7 @@ index 40e00f9..827aca9 100644
 +    }
 +    else if (cache->pool == EVENT_POOL_SEM && ReadNoFence( &cache->refcount ) == 2)
 +    {
-+        SEMAPHORE_BASIC_INFORMATION info;
++        SEMAPHORE_BASIC_INFORMATION info = {0};
 +
 +        /* only park semaphores with count 0, there is no ioctl to lower it */
 +        if (!linux_query_semaphore_obj( cache->fd, &info ) && !info.CurrentCount)
