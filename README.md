@@ -41,7 +41,7 @@ WINE_QPC_TSC_UNORDERED=1 %command% -vulkan
 2. Checks out that GE tag with all submodules and hooks `patches/` into `protonprep-valve-staging.sh` (`scripts/apply-overlay.sh`):
    - lsteamclient patches right after GE's own lsteamclient patches;
    - wine patches after all GE and staging wine patches, before `autoreconf -f; ./tools/make_requests`, so the protocol changes in `0003` are regenerated.
-3. Applies `scripts/slim-makefile.sh`, which drops the speech libraries (openfst, kaldi, vosk, piper) from Wine's build dependencies, and builds only `make wine lsteamclient` with GE's own `configure.sh` in its Docker container.
+3. Applies `scripts/slim-makefile.sh`, which drops the speech libraries (openfst, kaldi, vosk, piper) from Wine's build dependencies, and builds only `make lsteamclient` with GE's own `configure.sh` in its Docker container.
 4. `scripts/make-tarball.sh` downloads GE's official `<tag>-x86_64.tar.gz`, checks it against GE's `.sha512sum`, replaces `bin/wineserver`, the i386 and x86_64 `ntdll` (`.so` and `.dll`) and `lsteamclient.dll`, renames the tool to `<tag>-deadlock` in `compatibilitytool.vdf` and `version`, and repacks it.
 5. Publishes `<tag>-deadlock.tar.gz` and `.sha512sum` as a release.
 
@@ -49,7 +49,7 @@ Patches are applied with `--fuzz=0`. If a new GE release no longer applies clean
 
 ## Building locally
 
-Check out a GE tag with submodules, then follow the workflow's Patch, Configure and Make steps with `scripts/apply-overlay.sh`, `scripts/slim-makefile.sh` and `make wine lsteamclient` (`DEADLOCK_STATE` set to a scratch directory), and finish with `scripts/make-tarball.sh <ge-checkout> <ge-tag> <out-dir>`.
+Check out a GE tag with submodules, then follow the workflow's Patch, Configure and Make steps with `scripts/apply-overlay.sh`, `scripts/slim-makefile.sh` and `make lsteamclient` (`DEADLOCK_STATE` set to a scratch directory), and finish with `scripts/make-tarball.sh <ge-checkout> <ge-tag> <out-dir>`.
 
 ## License
 

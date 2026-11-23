@@ -1,5 +1,5 @@
 #!/bin/bash
-# Trim GE's Makefile.in so `make wine lsteamclient` does not build the speech libraries (openfst,
+# Trim GE's Makefile.in so `make lsteamclient` does not build the speech libraries (openfst,
 # kaldi, vosk, piper) that only other Wine modules use. This build only needs ntdll, wineserver
 # and lsteamclient; everything else comes from GE's own release.
 #

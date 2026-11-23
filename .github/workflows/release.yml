@@ -116,12 +116,12 @@ jobs:
         working-directory: ge/build
         run: ../configure.sh --build-name=${{ needs.plan.outputs.name }} --container-engine=docker
 
-      - name: Make wine and lsteamclient
+      - name: Make lsteamclient (builds wine first)
         working-directory: ge/build
-        # one make per goal: GE's wrapper starts a container per goal, and two at once race on the shared build tree
-        run: |
-          make -k -j$(nproc) wine
-          make -k -j$(nproc) lsteamclient
+        # One goal only: lsteamclient depends on wine. Each make invocation re-syncs the sources and
+        # strips their generated autotools files, so a second invocation tries to rebuild xz and
+        # libpcap and fails in the container; two goals at once race on the shared build tree.
+        run: make -j$(nproc) lsteamclient
 
       - name: Build outputs
         if: always()
