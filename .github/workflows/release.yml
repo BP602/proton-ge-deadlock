@@ -1,0 +1,170 @@
+name: Release
+
+# Builds GloriousEggroll/proton-ge-custom with the patches in this repo and publishes
+# <GE tag>-deadlock.tar.gz (+ .sha512sum) as a GitHub release, the layout ProtonPlus and
+# manual installs expect: one top-level directory named after the release.
+
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+    inputs:
+      ge_tag:
+        description: 'GE-Proton tag to build, e.g. GE-Proton11-14 (empty = latest GE release)'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  GE_REPO: GloriousEggroll/proton-ge-custom
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      ge_tag: ${{ steps.plan.outputs.ge_tag }}
+      name: ${{ steps.plan.outputs.name }}
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - name: Pick GE tag
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.ge_tag }}
+        run: |
+          ge_tag="$INPUT_TAG"
+          [ -n "$ge_tag" ] || ge_tag=$(gh api "repos/$GE_REPO/releases/latest" --jq .tag_name)
+          [[ "$ge_tag" =~ ^GE-Proton[0-9]+-[0-9]+$ ]] || { echo "::error::unexpected GE tag '$ge_tag'"; exit 1; }
+          name="$ge_tag-deadlock"
+          build=true
+          if gh release view "$name" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::$name already released (delete the release to rebuild)"
+            build=false
+          fi
+          {
+            echo "ge_tag=$ge_tag"
+            echo "name=$name"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ needs.plan.outputs.name }}
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    env:
+      DEADLOCK_STATE: ${{ github.workspace }}/.deadlock-state
+    steps:
+      - name: Cleanup disk space
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+          remove_packages: |
+            azure-cli google-cloud-cli google-chrome-stable firefox microsoft-edge-stable
+            postgresql* mysql* php* temurin-* *llvm* clang* mono-devel powershell dotnet-sdk-*
+          remove_folders: |
+            /usr/share/swift /usr/share/miniconda /usr/local/lib/node_modules
+            /usr/local/share/chromium /usr/local/share/powershell /usr/local/julia*
+            /usr/local/aws-cli /usr/local/aws-sam-cli /usr/share/gradle /usr/share/az*
+            /usr/local/.ghcup
+
+      - name: Prepare host
+        run: sudo apt update && sudo apt-get install -y ccache fontforge-nox
+
+      - name: Restore cache
+        id: ccache-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.ccache
+          key: ccache-proton-deadlock-${{ github.run_id }}
+          restore-keys: |
+            ccache-proton-deadlock
+
+      - name: Checkout overlay
+        uses: actions/checkout@v6
+        with:
+          path: overlay
+
+      - name: Checkout ${{ needs.plan.outputs.ge_tag }}
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.GE_REPO }}
+          ref: refs/tags/${{ needs.plan.outputs.ge_tag }}
+          path: ge
+          fetch-depth: 0
+          submodules: false
+
+      - name: Patch
+        working-directory: ge
+        run: |
+          git submodule update --init --filter=tree:0 --recursive
+          ../overlay/scripts/apply-overlay.sh .
+          # GE's CI ignores protonprep's exit status, so ../overlay/scripts/apply-overlay.sh verify checks
+          # that our hooks ran instead.
+          ./patches/protonprep-valve-staging.sh || true
+          ../overlay/scripts/apply-overlay.sh verify
+          # strip binaries at compile time to save space in the runner
+          patch -Np1 -i ./.github/patches/0001-build-strip-binaries-early.patch
+          mkdir ./build
+
+      - name: Configure
+        working-directory: ge/build
+        run: ../configure.sh --build-name=${{ needs.plan.outputs.name }} --container-engine=docker
+
+      - name: Make ${{ needs.plan.outputs.name }}
+        working-directory: ge/build
+        run: make -j$(nproc) redist
+
+      - name: Save cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.ccache
+          key: ${{ steps.ccache-restore.outputs.cache-primary-key }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v5
+        with:
+          name: ${{ needs.plan.outputs.name }}
+          retention-days: 1
+          path: |
+            ge/build/${{ needs.plan.outputs.name }}.tar.gz
+            ge/build/${{ needs.plan.outputs.name }}.sha512sum
+
+  release:
+    name: Release ${{ needs.plan.outputs.name }}
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: ${{ needs.plan.outputs.name }}
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ needs.plan.outputs.name }}
+          GE_TAG: ${{ needs.plan.outputs.ge_tag }}
+        run: |
+          if gh release view "$NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::error::release $NAME already exists; delete it first to rebuild"
+            exit 1
+          fi
+          gh release create "$NAME" "$NAME.tar.gz" "$NAME.sha512sum" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --latest \
+            --title "$NAME" \
+            --notes "$GE_TAG (https://github.com/$GE_REPO/releases/tag/$GE_TAG) plus the patches in this repository at $GITHUB_SHA. See the README for what they change and how to enable them."

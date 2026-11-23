@@ -1,0 +1,88 @@
+diff --git a/dlls/ntdll/time.c b/dlls/ntdll/time.c
+index b594b9b..10b965d 100644
+--- a/dlls/ntdll/time.c
++++ b/dlls/ntdll/time.c
+@@ -425,6 +425,7 @@ enum
+ };
+ 
+ static volatile LONG qpc_tsc_state;
++static BOOL      qpc_tsc_unordered;      /* WINE_QPC_TSC_UNORDERED: plain rdtsc, no wait for earlier instructions */
+ 
+ /* written before qpc_tsc_state releases them, then constant; qpc_tsc_base_qpc is also read by
+  * calibrating callers while a pass is being closed, hence the relaxed atomics on it */
+@@ -445,10 +446,17 @@ struct qpc_tsc_sample
+     ULONGLONG tsc;
+ };
+ 
++/* rdtscp waits until every earlier instruction has executed, which in memory-bound code costs
++ * as much as the outstanding cache misses; plain rdtsc does not wait. Plain rdtsc keeps each
++ * thread monotonic but lets a reading taken after observing another thread's store come out up
++ * to a few hundred ns earlier than that thread's reading, hence opt-in. */
+ static inline ULONGLONG qpc_read_tsc(void)
+ {
+-    unsigned int aux;
+-    return __rdtscp( &aux );
++    unsigned int lo, hi;
++
++    if (qpc_tsc_unordered) return __rdtsc();
++    __asm__ __volatile__( "rdtscp" : "=a" (lo), "=d" (hi) :: "ecx" );
++    return ((ULONGLONG)hi << 32) | lo;
+ }
+ 
+ static inline LONGLONG qpc_tsc_ticks( ULONGLONG tsc )
+@@ -543,6 +551,9 @@ static int qpc_tsc_usable(void)
+         return 0;
+     }
+ 
++    if ((qpc_tsc_unordered = qpc_tsc_env_set( L"WINE_QPC_TSC_UNORDERED" )))
++        TRACE_(qpc)( "WINE_QPC_TSC_UNORDERED set, reading the TSC with rdtsc\n" );
++
+     if (qpc_tsc_env_set( L"WINE_ENABLE_QPC_TSC" ))
+     {
+         TRACE_(qpc)( "WINE_ENABLE_QPC_TSC set, not following the kernel clocksource\n" );
+@@ -641,7 +652,7 @@ static void qpc_tsc_calibrate( const struct qpc_tsc_sample *sample )
+     InterlockedExchange( (LONG *)&qpc_tsc_state, QPC_TSC_CALIBRATING );
+ }
+ 
+-static BOOL qpc_tsc_counter( LARGE_INTEGER *counter )
++static BOOL DECLSPEC_NOINLINE qpc_tsc_counter( LARGE_INTEGER *counter )
+ {
+     /* acquire: the values published below must not be loaded before the state that releases
+      * them, which the compiler would otherwise be free to do */
+@@ -692,13 +703,34 @@ static BOOL qpc_tsc_counter( LARGE_INTEGER *counter )
+ /******************************************************************************
+  *  RtlQueryPerformanceCounter   [NTDLL.@]
+  */
++#if defined(__x86_64__) && !defined(__arm64ec__)
++static BOOL DECLSPEC_NOINLINE qpc_slow_path( LARGE_INTEGER *counter )
++{
++    if (!qpc_tsc_counter( counter )) NtQueryPerformanceCounter( counter, NULL );
++    return TRUE;
++}
++#endif
++
+ BOOL WINAPI DECLSPEC_HOTPATCH RtlQueryPerformanceCounter( LARGE_INTEGER *counter )
+ {
+ #if defined(__x86_64__) && !defined(__arm64ec__)
+-    if (qpc_tsc_counter( counter )) return TRUE;
+-#endif
++    /* fast path: no callee-saved registers to spill; probing, calibration and a TSC below the
++     * base all go through qpc_slow_path */
++    if (__atomic_load_n( &qpc_tsc_state, __ATOMIC_ACQUIRE ) == QPC_TSC_READY)
++    {
++        ULONGLONG tsc = qpc_read_tsc();
++
++        if ((LONGLONG)(tsc - qpc_tsc_base_tsc) >= 0)
++        {
++            counter->QuadPart = qpc_tsc_ticks( tsc );
++            return TRUE;
++        }
++    }
++    return qpc_slow_path( counter );
++#else
+     NtQueryPerformanceCounter( counter, NULL );
+     return TRUE;
++#endif
+ }
+ 
+ /******************************************************************************
