@@ -2,3 +2,4 @@
 patches/lsteamclient/0001-skip-env-sync-on-callback-polling.patch	account_number	b2239ae33d9bc561
 patches/lsteamclient/0001-skip-env-sync-on-callback-polling.patch	account_number	4e07408562bedb8b
 patches/lsteamclient/0001-skip-env-sync-on-callback-polling.patch	account_number	87e50b28705900bb
+.github/workflows/release.yml	private_person	43eadae9cda783e0
