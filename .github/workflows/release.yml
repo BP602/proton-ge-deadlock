@@ -15,8 +15,10 @@ on:
         required: false
         type: string
 
+# Read-only by default: the build job runs GE's build system, its submodules and a third-party
+# action. Only the jobs that publish or file issues get write access.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
@@ -29,6 +31,9 @@ jobs:
   plan:
     name: Plan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
     outputs:
       ge_tag: ${{ steps.plan.outputs.ge_tag }}
       name: ${{ steps.plan.outputs.name }}
@@ -49,6 +54,16 @@ jobs:
             echo "::notice::$name already released (delete the release to rebuild)"
             build=false
           fi
+          # A failed build opens an issue (job "Report failure"); hourly runs leave that tag alone
+          # until the issue is closed, a manual dispatch always retries.
+          title="$name failed to build"
+          if [ "$build" = true ] && [ "$GITHUB_EVENT_NAME" = schedule ]; then
+            open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json title --jq '.[].title')
+            if grep -qxF -- "$title" <<< "$open"; then
+              echo "::notice::'$title' is open; skipping (close it or dispatch the workflow to retry)"
+              build=false
+            fi
+          fi
           {
             echo "ge_tag=$ge_tag"
             echo "name=$name"
@@ -62,10 +77,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DEADLOCK_STATE: ${{ github.workspace }}/.deadlock-state
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Cleanup disk space
-        uses: endersonmenezes/free-disk-space@v3
+        uses: endersonmenezes/free-disk-space@7901478139cff6e9d44df5972fd8ab8fcade4db1 # v3.2.2
         with:
           remove_android: true
           remove_dotnet: true
@@ -85,18 +99,20 @@ jobs:
         run: sudo apt update && sudo apt-get install -y binutils-mingw-w64-x86-64 binutils-mingw-w64-i686
 
       - name: Checkout overlay
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           path: overlay
+          persist-credentials: false
 
       - name: Checkout ${{ needs.plan.outputs.ge_tag }}
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           repository: ${{ env.GE_REPO }}
           ref: refs/tags/${{ needs.plan.outputs.ge_tag }}
           path: ge
           fetch-depth: 0
           submodules: false
+          persist-credentials: false
 
       - name: Patch
         working-directory: ge
@@ -129,10 +145,12 @@ jobs:
         run: find . -type f \( -name ntdll.so -o -name ntdll.dll -o -name lsteamclient.dll -o -name wineserver \) -path '*dst-*' -printf '%s %p\n' | sort -k2
 
       - name: Assemble ${{ needs.plan.outputs.name }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: overlay/scripts/make-tarball.sh ge ${{ needs.plan.outputs.ge_tag }} out
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: ${{ needs.plan.outputs.name }}
           retention-days: 1
@@ -142,7 +160,7 @@ jobs:
 
       - name: Upload built files for debugging
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: built-files
           retention-days: 1
@@ -151,13 +169,41 @@ jobs:
             ge/build/dst-*/lib/wine/*/ntdll.*
             ge/build/**/lsteamclient.dll
 
+  report:
+    name: Report failure
+    needs: [plan, build]
+    if: failure() && needs.build.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Open or update issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ needs.plan.outputs.name }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="$NAME failed to build"
+          num=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,title \
+            --jq "[.[] | select(.title == \"$title\") | .number][0] // empty")
+          if [ -n "$num" ]; then
+            gh issue comment "$num" --repo "$GITHUB_REPOSITORY" --body "Failed again: $RUN_URL"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$(printf '%s\n\n%s\n' \
+              "Build failed: $RUN_URL" \
+              "Hourly runs skip this tag while this issue is open. Fix the patches, then dispatch the workflow (or close this issue to let the next hourly run retry).")"
+          fi
+
   release:
     name: Release ${{ needs.plan.outputs.name }}
     needs: [plan, build]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
         with:
           name: ${{ needs.plan.outputs.name }}
 
@@ -177,3 +223,15 @@ jobs:
             --latest \
             --title "$NAME" \
             --notes "$GE_TAG (https://github.com/$GE_REPO/releases/tag/$GE_TAG) with ntdll, wineserver and lsteamclient rebuilt from the patches in this repository at $GITHUB_SHA; everything else is GE's official release. See the README for what they change and how to enable them."
+
+      - name: Close failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NAME: ${{ needs.plan.outputs.name }}
+        run: |
+          title="$NAME failed to build"
+          gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 200 --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number" |
+          while read -r num; do
+            gh issue close "$num" --repo "$GITHUB_REPOSITORY" --comment "Released as $NAME."
+          done

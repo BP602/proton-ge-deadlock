@@ -37,15 +37,17 @@ WINE_QPC_TSC_UNORDERED=1 %command% -vulkan
 
 `.github/workflows/release.yml` runs hourly and on manual dispatch (optional `ge_tag` input). It:
 
-1. Finds the latest GE release (or the requested tag). If `<tag>-deadlock` already exists as a release here, it stops.
+1. Finds the latest GE release (or the requested tag). If `<tag>-deadlock` already exists as a release here, it stops. Hourly runs also stop while an issue titled `<tag>-deadlock failed to build` is open.
 2. Checks out that GE tag with all submodules and hooks `patches/` into `protonprep-valve-staging.sh` (`scripts/apply-overlay.sh`):
    - lsteamclient patches right after GE's own lsteamclient patches;
    - wine patches after all GE and staging wine patches, before `autoreconf -f; ./tools/make_requests`, so the protocol changes in `0003` are regenerated.
 3. Applies `scripts/slim-makefile.sh`, which drops the speech libraries (openfst, kaldi, vosk, piper) from Wine's build dependencies, and builds only `make lsteamclient` with GE's own `configure.sh` in its Docker container.
 4. `scripts/make-tarball.sh` downloads GE's official `<tag>-x86_64.tar.gz`, checks it against GE's `.sha512sum`, replaces `bin/wineserver`, the i386 and x86_64 `ntdll` (`.so` and `.dll`) and `lsteamclient.dll`, renames the tool to `<tag>-deadlock` in `compatibilitytool.vdf` and `version`, and repacks it.
-5. Publishes `<tag>-deadlock.tar.gz` and `.sha512sum` as a release.
+5. Publishes `<tag>-deadlock.tar.gz` and `.sha512sum` as a release and closes the `failed to build` issue for that tag, if any.
 
-Patches are applied with `--fuzz=0`. If a new GE release no longer applies cleanly, the run fails and no release is published; the patch needs a rebase. To rebuild an existing version, delete its release and dispatch the workflow.
+Patches are applied with `--fuzz=0`. If a new GE release no longer applies cleanly, the run fails, no release is published and an issue `<tag>-deadlock failed to build` is opened (later failures comment on it); the patch needs a rebase. Hourly runs skip that tag while the issue is open, so fix the patches and dispatch the workflow, or close the issue to let the next hourly run retry. To rebuild an existing version, delete its release and dispatch the workflow.
+
+Jobs get the least token access they need: `contents: read` by default (the build job runs GE's build system and a third-party action), `issues: read` to plan, `issues: write` to open and close the failure issue, `contents: write` only to publish. Actions are pinned by commit SHA.
 
 ## Building locally
 
